@@ -1,0 +1,17 @@
+20 actions
+a = [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19]
+a0 means negtive, turn left
+a1 means possitive, turn right
+a2,a3 means if turn 1 * 0.001
+a4,a5 means if turn 2 * 0.001
+a6,a7 means if turn 4 * 0.001
+a8,a9 means if turn 8 * 0.001
+a10,a11 means if turn 16 * 0.001
+a12,a13 means if turn 32 * 0.001
+a14,a15 means if turn 64 * 0.001
+a16,a17 means if turn 128 * 0.001
+a18,a19 means if turn 256 * 0.001
+
+so steer range from -0.511 ~ +0.511
+
+change reward function, take yaw into acount
