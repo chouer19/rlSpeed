@@ -8,11 +8,6 @@ import time
 import math
 
 try:
-    import pygame
-except ImportError:
-    raise RuntimeError('cannot import pygame, make sure pygame package is installed')
-
-try:
     import numpy as np
 except ImportError:
     raise RuntimeError('cannot import numpy, make sure numpy package is installed')
@@ -34,6 +29,8 @@ sys.path.append('simulator/')
 import wrapped_carla as simulator
 sys.path.append('dqn/')
 import dqn
+sys.path.append('render/')
+from render import Render
 
 from carla import image_converter
 from carla import sensor
@@ -46,13 +43,28 @@ from carla.util import print_over_same_line
 ACTIONS = 15
 FRAME_PER_ACTION = 4
 BATCH = 32
+GAMMA = 0.99 # decay rate of past observations
+OBSERVE = 100000. # timesteps to observe before training
+EXPLORE = 2000000. # frames over which to anneal epsilon
+FINAL_EPSILON = 0.0001 # final value of epsilon
+INITIAL_EPSILON = 0.2 # starting value of epsilon
+REPLAY_MEMORY = 50000 # number of previous transitions to remember
+REPLAY_MEMORY = 5000 # number of previous transitions to remember
+OBSERVE = REPLAY_MEMORY # timesteps to observe before training
 
-def Run(args , cont, s, readout, h_fc1):
+RESIZE_WIDTH = 240
+RESIZE_HEIGHT = 80
+
+def Run(args , con, s, readout, h_fc1, sess):
+    render = Render()
+    #log = open('./log/'+time.strftime("rlSpeed%Y-%m-%d_%H:%M", time.localtime()),'w')
     with make_carla_client(args.host, args.port) as client:
         #init game
         game = simulator.CarlaGame(client, args)
         game.initialize_game()
         #game.new_game()
+
+        # init render
 
         # define the cost function
         a = tf.placeholder("float", [None, ACTIONS])
@@ -70,8 +82,10 @@ def Run(args , cont, s, readout, h_fc1):
         con.state = game.frame_step(steer,throttle,brake)
         terminal, reward, image = render.new_frame(con.state.v)
 
-        x_t = cv2.cvtColor(cv2.resize(image, (160, 160)), cv2.COLOR_BGR2GRAY)
+        x_t = cv2.cvtColor(cv2.resize(image, (80, 240)), cv2.COLOR_BGR2GRAY)
         ret, x_t = cv2.threshold(x_t,1,255,cv2.THRESH_BINARY)
+        print(np.shape(x_t))
+        #x_t1 = np.reshape(x_t1, (80, 240, 1))
         s_t = np.stack((x_t, x_t, x_t, x_t, x_t, x_t, x_t, x_t, x_t, x_t), axis=2)
 
         Replay = deque()
@@ -90,6 +104,18 @@ def Run(args , cont, s, readout, h_fc1):
         epsilon = INITIAL_EPSILON
         t = 0
         while True:
+            timer.tick()
+            if terminal:
+                render.init()
+                game.new_game()
+                timer.lap()
+                terminal = False
+                t = t - t%4
+                continue
+            if timer.elapsed_seconds_since_lap() < 0.025:
+                con.state = game.frame_step(steer,throttle,brake)
+                continue
+            timer.lap()
             if epsilon > FINAL_EPSILON and t > OBSERVE:
                 epsilon -= (INITIAL_EPSILON - FINAL_EPSILON) / EXPLORE
 
@@ -117,18 +143,38 @@ def Run(args , cont, s, readout, h_fc1):
             terminal, reward, image = render.new_frame(con.state.v)
             
             if t % FRAME_PER_ACTION == 0:
-                x_t1 = cv2.cvtColor(cv2.resize(image, (160, 160)), cv2.COLOR_BGR2GRAY)
+                x_t1 = cv2.cvtColor(cv2.resize(image, (80, 240)), cv2.COLOR_BGR2GRAY)
                 ret, x_t1 = cv2.threshold(x_t1, 1, 255, cv2.THRESH_BINARY)
-                x_t1 = np.reshape(x_t1, (160, 160, 1))
+                x_t1 = np.reshape(x_t1, (240, 80, 1))
                 s_t1 = np.append(x_t1, s_t[:, :, :9], axis=2)
                 # store the transition in Reply
-                Repley.append((s_t, a_t, r_t, s_t1, terminal))
-                if len(Repley) > REPLAY_MEMORY:
-                    Repley.popleft()
+                #Replay.append((s_t, a_t, r_t, s_t1, terminal))
+                Replay.append((s_t, action_array, reward, s_t1, terminal))
+                if len(Replay) > REPLAY_MEMORY:
+                    Replay.popleft()
+                # log
+                #log.write(str(throttle)+'\n')
+                #log.write(str(brake)+'\n')
+                #log.write(str(steer)+'\n')
+                #log.write(str(reward)+'\n')
+                #log.write(str(con.state.v)+'\n')
+                #log.write(str(render.pips)+'\n')
+                print('*******************************************')
+                print(int(t / FRAME_PER_ACTION))
+                print('*******************************************')
+                print(round(con.state.v,2))
+                print(round(render.pips[2]['speed'],2))
+                print(round(reward,3))
+                #print(render.pips)
+                print(throttle)
+                print(brake)
+                print(round(steer,2))
+            else:
+                terminal = False
             # only train if done observing
             if t > OBSERVE:
                 # sample a minibatch to train on
-                minibatch = random.sample(D, BATCH)
+                minibatch = random.sample(Replay, BATCH)
                 # get the batch variables
                 s_j_batch = [d[0] for d in minibatch]
                 a_batch = [d[1] for d in minibatch]
@@ -138,8 +184,7 @@ def Run(args , cont, s, readout, h_fc1):
                 y_batch = []
                 readout_j1_batch = readout.eval(feed_dict = {s : s_j1_batch})
                 for i in range(0, len(minibatch)):
-                    terminal = minibatch[i][4]
-                    # if terminal, only equals reward
+                    terminal = minibatch[i][4] # if terminal, only equals reward
                     if terminal:
                         y_batch.append(r_batch[i])
                     else:
@@ -162,15 +207,14 @@ def Run(args , cont, s, readout, h_fc1):
             # update the old values
             s_t = s_t1
             # save progress every 10000 iterations
+            t += 1
             if t % 10000 == 0:
                 saver.save(sess, 'saved_networks/rlSpeed-dqn', global_step = t)
-
-            t += 1
         pass
 
 def value_to_array(action_value):
     action_array = np.zeros(ACTIONS)
-    action_value = int(action_balue) * 100
+    action_value = int(action_value) * 100
     action_value = min(95, action_value)
     action_value = max(-95, action_value)
     if action_value >=0:
@@ -199,7 +243,7 @@ def array_to_value(action_array):
                    np.argmax(action_array[7:9]) * 4 + \
                    np.argmax(action_array[9:11]) * 2 + \
                    np.argmax(action_array[11:13]) * 1
-    action_value = action_value * (np.argmax(action_array[13:15]) * 2 -1)
+    action_value = action_value * (np.argmax(action_array[13:15]) * 2 -1) * 0.01
     return action_value
     pass
 
@@ -208,8 +252,8 @@ def playGame(args):
     contr = Controller(filename = 'log/all.road')
     # network
     sess = tf.InteractiveSession()
-    s, readout, h_fc1 = createNetwork()
-    Run(args , contr, s, readout, h_fc1)
+    s, readout, h_fc1 = dqn.createNetwork()
+    Run(args , contr, s, readout, h_fc1, sess)
 
 def main():
     argparser = argparse.ArgumentParser(
