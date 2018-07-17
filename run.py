@@ -41,7 +41,7 @@ from carla.tcp import TCPConnectionError
 from carla.util import print_over_same_line
 
 ACTIONS = 15
-FRAME_PER_ACTION = 4
+FRAME_PER_ACTION = 1
 BATCH = 32
 GAMMA = 0.99 # decay rate of past observations
 OBSERVE = 100000. # timesteps to observe before training
@@ -49,7 +49,7 @@ EXPLORE = 2000000. # frames over which to anneal epsilon
 FINAL_EPSILON = 0.0001 # final value of epsilon
 INITIAL_EPSILON = 0.2 # starting value of epsilon
 REPLAY_MEMORY = 50000 # number of previous transitions to remember
-REPLAY_MEMORY = 5000 # number of previous transitions to remember
+REPLAY_MEMORY = 20000 # number of previous transitions to remember
 OBSERVE = REPLAY_MEMORY # timesteps to observe before training
 
 RESIZE_WIDTH = 240
@@ -84,7 +84,6 @@ def Run(args , con, s, readout, h_fc1, sess):
 
         x_t = cv2.cvtColor(cv2.resize(image, (80, 240)), cv2.COLOR_BGR2GRAY)
         ret, x_t = cv2.threshold(x_t,1,255,cv2.THRESH_BINARY)
-        print(np.shape(x_t))
         #x_t1 = np.reshape(x_t1, (80, 240, 1))
         s_t = np.stack((x_t, x_t, x_t, x_t, x_t, x_t, x_t, x_t, x_t, x_t), axis=2)
 
@@ -110,7 +109,6 @@ def Run(args , con, s, readout, h_fc1, sess):
                 game.new_game()
                 timer.lap()
                 terminal = False
-                t = t - t%4
                 continue
             if timer.elapsed_seconds_since_lap() < 0.025:
                 con.state = game.frame_step(steer,throttle,brake)
@@ -184,8 +182,8 @@ def Run(args , con, s, readout, h_fc1, sess):
                 y_batch = []
                 readout_j1_batch = readout.eval(feed_dict = {s : s_j1_batch})
                 for i in range(0, len(minibatch)):
-                    terminal = minibatch[i][4] # if terminal, only equals reward
-                    if terminal:
+                    term = minibatch[i][4] # if terminal, only equals reward
+                    if term:
                         y_batch.append(r_batch[i])
                     else:
                         y_batch.append(r_batch[i] + GAMMA *
